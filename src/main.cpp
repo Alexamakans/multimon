@@ -362,61 +362,54 @@ void render() {
   float tz = eyeZ + rayZ;
   gluLookAt(eyeX, eyeY, eyeZ, tx, ty, tz, 0.0f, 1.0f, 0.0f);
 
-  const float radius = 3.0f; // hexagon radius distance
-  const float focused_w = 2.5f;
-  const float base_z = -3.0f + roll_perc;
-
   size_t count = focusedmonitors.size();
   if (count > 6) {
     count = 6;
   }
 
-  for (size_t i = 0; i < count; i++) {
-    const MyMonitor *m = focusedmonitors[i];
-    if (m == nullptr) {
-      continue; // skip null monitors
-    }
+  float focused_w = 2.5f;
+  float base_z = -3.0f + roll_perc;
 
-    float aspect = (float)m->height / m->width;
-    float focused_h = focused_w * aspect;
+  {
+    float radius = focused_w * 1.2f; // some spacing factor
+    float angle_deg = 60.0f;
 
-    float x = 0.0f;
-    float y = 0.0f;   // keep vertical at zero (or adjust if needed)
-    float z = base_z; // base depth from camera
-
-    float angle_deg = 0.0f;
-
-    if (i == 0) {
-      // center monitor at origin
-      x = 0.0f;
-      z = base_z;
-      angle_deg = 0.0f;
-    } else {
-      int idx = i - 1;
-      angle_deg = 60.0f * idx;
-      float angle_rad = angle_deg * M_PI / 180.0f;
-
-      // place on hexagon ring in XZ plane
-      x = radius * cos(angle_rad);
-      z = base_z + radius * sin(angle_rad);
-    }
-
-    glBindTexture(GL_TEXTURE_2D, m->tex);
     glPushMatrix();
+    //glTranslatef(0.0f, 0.0f, base_z);
 
-    glTranslatef(x, y, z);
-    glRotatef(angle_deg, 0.0f, 1.0f, 0.0f);
+    for (size_t i = 0; i < count; i++) {
+      const MyMonitor *m = focusedmonitors[i];
+      if (m == nullptr)
+        continue;
 
-    glBegin(GL_QUADS);
-    glTexCoord2f(0, 0);
-    glVertex3f(-focused_w / 2, focused_h / 2, 0);
-    glTexCoord2f(1, 0);
-    glVertex3f(focused_w / 2, focused_h / 2, 0);
-    glTexCoord2f(1, 1);
-    glVertex3f(focused_w / 2, -focused_h / 2, 0);
-    glTexCoord2f(0, 1);
-    glVertex3f(-focused_w / 2, -focused_h / 2, 0);
-    glEnd();
+      float aspect = (float)m->height / m->width;
+      float focused_h = focused_w * aspect;
+
+      float angle = i * angle_deg * (M_PI / 180.0f); // to radians
+      float x = radius * cos(angle);
+      float z = radius * sin(angle);
+
+      glPushMatrix();
+      glTranslatef(x, 0.0f, z);
+
+      // Optional: rotate monitor to face center
+      glRotatef(-i * angle_deg, 0.0f, 1.0f, 0.0f);
+
+      glBindTexture(GL_TEXTURE_2D, m->tex);
+
+      glBegin(GL_QUADS);
+      glTexCoord2f(0, 0);
+      glVertex3f(-focused_w / 2, focused_h / 2, 0);
+      glTexCoord2f(1, 0);
+      glVertex3f(focused_w / 2, focused_h / 2, 0);
+      glTexCoord2f(1, 1);
+      glVertex3f(focused_w / 2, -focused_h / 2, 0);
+      glTexCoord2f(0, 1);
+      glVertex3f(-focused_w / 2, -focused_h / 2, 0);
+      glEnd();
+
+      glPopMatrix();
+    }
 
     glPopMatrix();
   }
