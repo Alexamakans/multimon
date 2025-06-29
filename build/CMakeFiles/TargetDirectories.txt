@@ -1,3 +1,0 @@
-/home/alex/dev/multimon/build/CMakeFiles/viture_ar_desktop.dir
-/home/alex/dev/multimon/build/CMakeFiles/edit_cache.dir
-/home/alex/dev/multimon/build/CMakeFiles/rebuild_cache.dir

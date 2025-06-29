@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/home/alex/dev/multimon/build",
-  "command": "/usr/bin/c++  -I/home/alex/dev/multimon/include -std=gnu++17 -o CMakeFiles/viture_ar_desktop.dir/src/main.cpp.o -c /home/alex/dev/multimon/src/main.cpp",
-  "file": "/home/alex/dev/multimon/src/main.cpp",
-  "output": "CMakeFiles/viture_ar_desktop.dir/src/main.cpp.o"
-}
-]

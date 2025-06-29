@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/viture_ar_desktop.dir/src/main.cpp.o -o viture_ar_desktop  -Wl,-rpath,/home/alex/dev/multimon/libs /home/alex/dev/multimon/libs/libviture_one_sdk.so /usr/lib64/libGL.so -lGLU -lX11 -lXrandr -lXext -lm
