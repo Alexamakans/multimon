@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  glasses.fov = 30.0;
+  glasses.fov = 35.0;
   on_align();
 
   on_align_command = on_align;
@@ -320,6 +320,21 @@ bool isLookingAt(float rayX, float rayY, float rayZ, float centerX,
 }
 
 void render() {
+  //if (focusedmonitors.size() > 0) {
+  //  // Suppose focusedmonitors[0] has these fields:
+  //  int x = focusedmonitors[0]->x;
+  //  int y = focusedmonitors[0]->y;
+  //  int width = focusedmonitors[0]->width;
+  //  int height = focusedmonitors[0]->height;
+
+  //  // Warp mouse to center of that monitor:
+  //  int target_x = x + width / 2;
+  //  int target_y = y + height / 2;
+
+  //  XWarpPointer(dpy, None, root, 0, 0, 0, 0, target_x, target_y);
+  //  XFlush(dpy);
+  //}
+
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_TEXTURE_2D);
