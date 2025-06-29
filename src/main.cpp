@@ -350,6 +350,7 @@ void render() {
   }
   roll_perc *= abs(roll_perc);
   roll_perc *= 0.5f;
+  roll_perc = 0.0f;
 
   // Get gaze vector
   float rayX, rayY, rayZ;
@@ -362,22 +363,21 @@ void render() {
   float tz = eyeZ + rayZ;
   gluLookAt(eyeX, eyeY, eyeZ, tx, ty, tz, 0.0f, 1.0f, 0.0f);
 
-  size_t count = focusedmonitors.size();
-  if (count > 6) {
-    count = 6;
+  while (focusedmonitors.size() > 6) {
+    // TODO: some other way
+    focusedmonitors.pop_back();
   }
 
-  float focused_w = 2.5f;
-  float base_z = -3.0f + roll_perc;
+  float focused_w = 3.0f;
+  // radius of circle inscribed in a hexagon, i.e. the distance to the centre
+  // of the edges from the hexagon's centre.
+  float r = sqrt(3.0) / 2.0 * focused_w;
+  float base_z = -r + roll_perc;
 
   {
-    float radius = focused_w * 1.2f; // some spacing factor
     float angle_deg = 60.0f;
 
-    glPushMatrix();
-    //glTranslatef(0.0f, 0.0f, base_z);
-
-    for (size_t i = 0; i < count; i++) {
+    for (int i = 0; i < focusedmonitors.size(); i++) {
       const MyMonitor *m = focusedmonitors[i];
       if (m == nullptr)
         continue;
@@ -385,15 +385,9 @@ void render() {
       float aspect = (float)m->height / m->width;
       float focused_h = focused_w * aspect;
 
-      float angle = i * angle_deg * (M_PI / 180.0f); // to radians
-      float x = radius * cos(angle);
-      float z = radius * sin(angle);
-
       glPushMatrix();
-      glTranslatef(x, 0.0f, z);
-
-      // Optional: rotate monitor to face center
       glRotatef(-i * angle_deg, 0.0f, 1.0f, 0.0f);
+      glTranslatef(0.0f, 0.0f, base_z);
 
       glBindTexture(GL_TEXTURE_2D, m->tex);
 
@@ -410,12 +404,10 @@ void render() {
 
       glPopMatrix();
     }
-
-    glPopMatrix();
   }
 
   // Draw thumbnails above focused screen
-  float thumbY = 1.1f;
+  float thumbY = 1.2f;
   float spacing = 0.6f;
   float thumbSize = 0.55f;
   for (size_t i = 0; i < monitors.size(); i++) {
