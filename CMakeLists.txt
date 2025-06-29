@@ -31,7 +31,9 @@ target_link_libraries(${PROJECT_NAME}
     X11
     Xrandr
     Xext
+    Xfixes
     m
+    rt
 )
 
 # Optional: set C++17 (or C++20) if needed

@@ -221,7 +221,71 @@ void grabMonitor(MyMonitor &m) {
   XShmGetImage(dpy, root, m.img, m.x, m.y, AllPlanes);
 }
 
+#include <X11/extensions/Xfixes.h> // make sure this is included at the top
+
 void uploadTexture(MyMonitor &m) {
+  // Get current cursor image and position
+  XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+  if (ci) {
+    // Cursor position relative to screen
+    int cursor_x = ci->x - ci->xhot;
+    int cursor_y = ci->y - ci->yhot;
+
+    // Blend cursor pixels into monitor image data if cursor overlaps this
+    // monitor
+    for (unsigned int cy = 0; cy < ci->height; ++cy) {
+      int img_y = cursor_y + cy - m.y;
+      if (img_y < 0 || img_y >= m.height)
+        continue;
+
+      for (unsigned int cx = 0; cx < ci->width; ++cx) {
+        int img_x = cursor_x + cx - m.x;
+        if (img_x < 0 || img_x >= m.width)
+          continue;
+
+        // Cursor pixel ARGB format in ci->pixels[]
+        unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
+
+        // Extract ARGB components from cursor pixel
+        unsigned char a = (cursor_pixel >> 24) & 0xFF;
+        unsigned char r = (cursor_pixel >> 16) & 0xFF;
+        unsigned char g = (cursor_pixel >> 8) & 0xFF;
+        unsigned char b = (cursor_pixel) & 0xFF;
+
+        // Skip fully transparent pixels
+        if (a == 0)
+          continue;
+
+        // Calculate pixel offset in XImage data (assuming 32bpp BGRA)
+        unsigned char *p = (unsigned char *)m.img->data +
+                           img_y * m.img->bytes_per_line + img_x * 4;
+
+        // Current background pixel (BGRA)
+        unsigned char bg_b = p[0];
+        unsigned char bg_g = p[1];
+        unsigned char bg_r = p[2];
+        unsigned char bg_a = p[3];
+
+        // Alpha blending (simple over operator)
+        float alpha = a / 255.0f;
+        float inv_alpha = 1.0f - alpha;
+
+        unsigned char out_r = (unsigned char)(r * alpha + bg_r * inv_alpha);
+        unsigned char out_g = (unsigned char)(g * alpha + bg_g * inv_alpha);
+        unsigned char out_b = (unsigned char)(b * alpha + bg_b * inv_alpha);
+        unsigned char out_a = 255; // fully opaque after blending
+
+        // Store blended pixel back as BGRA
+        p[0] = out_b;
+        p[1] = out_g;
+        p[2] = out_r;
+        p[3] = out_a;
+      }
+    }
+
+    XFree(ci);
+  }
+
   glBindTexture(GL_TEXTURE_2D, m.tex);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m.width, m.height, GL_BGRA,
                   GL_UNSIGNED_BYTE, m.img->data);
@@ -320,12 +384,12 @@ bool isLookingAt(float rayX, float rayY, float rayZ, float centerX,
 }
 
 void render() {
-  //if (focusedmonitors.size() > 0) {
-  //  // Suppose focusedmonitors[0] has these fields:
-  //  int x = focusedmonitors[0]->x;
-  //  int y = focusedmonitors[0]->y;
-  //  int width = focusedmonitors[0]->width;
-  //  int height = focusedmonitors[0]->height;
+  // if (focusedmonitors.size() > 0) {
+  //   // Suppose focusedmonitors[0] has these fields:
+  //   int x = focusedmonitors[0]->x;
+  //   int y = focusedmonitors[0]->y;
+  //   int width = focusedmonitors[0]->width;
+  //   int height = focusedmonitors[0]->height;
 
   //  // Warp mouse to center of that monitor:
   //  int target_x = x + width / 2;
