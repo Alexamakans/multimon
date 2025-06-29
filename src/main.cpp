@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  glasses.fov = 35.0;
+  glasses.fov = 45.0;
   on_align();
 
   on_align_command = on_align;
@@ -456,8 +456,8 @@ void render() {
   {
     float angle_deg = 60.0f;
 
-    for (int i = 0; i < focusedmonitors.size(); i++) {
-      const MyMonitor *m = focusedmonitors[i];
+    for (int i = 0; i < int(focusedmonitors.size()) - 1; i++) {
+      const MyMonitor *m = focusedmonitors[i+1];
       if (m == nullptr)
         continue;
 
@@ -483,6 +483,31 @@ void render() {
 
       glPopMatrix();
     }
+  }
+
+  if (focusedmonitors.size() > 0 && focusedmonitors[0] != nullptr) {
+    const auto &m = focusedmonitors.at(0);
+    float aspect = (float)m->height / m->width;
+    float focused_h = focused_w * aspect;
+
+    glPushMatrix();
+    glRotatef(-36.0f, 1.0f, 0.0f, 0.0f);
+    glTranslatef(0.0f, 0.0f, base_z);
+
+    glBindTexture(GL_TEXTURE_2D, m->tex);
+
+    glBegin(GL_QUADS);
+    glTexCoord2f(0, 0);
+    glVertex3f(-focused_w / 2, focused_h / 2, 0);
+    glTexCoord2f(1, 0);
+    glVertex3f(focused_w / 2, focused_h / 2, 0);
+    glTexCoord2f(1, 1);
+    glVertex3f(focused_w / 2, -focused_h / 2, 0);
+    glTexCoord2f(0, 1);
+    glVertex3f(-focused_w / 2, -focused_h / 2, 0);
+    glEnd();
+
+    glPopMatrix();
   }
 
   // Draw thumbnails above focused screen
