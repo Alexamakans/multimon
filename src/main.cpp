@@ -7,6 +7,7 @@
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/Xrandr.h>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -117,19 +118,21 @@ void on_align() {
 }
 
 void on_push() {
-  for (int i = focusedmonitors.size() - 1; i >= 0; i--) {
-    if (i == focusedmonitors.size() - 1) {
+  for (int i = int(focusedmonitors.size()) - 1; i >= 0; i--) {
+    if (i == int(focusedmonitors.size()) - 1) {
       focusedmonitors.push_back(focusedmonitors[i]);
     } else {
       focusedmonitors[i + 1] = focusedmonitors[i];
     }
   }
-  focusedmonitors[0] = nullptr;
+  if (focusedmonitors.size() > 0) {
+    focusedmonitors[0] = nullptr;
+  }
 }
 
 void on_pop() {
   for (int i = 0; i < focusedmonitors.size(); i++) {
-    if (i == focusedmonitors.size() - 1) {
+    if (i == int(focusedmonitors.size()) - 1) {
       focusedmonitors[i] = nullptr;
     } else {
       focusedmonitors[i] = focusedmonitors[i + 1];
@@ -140,12 +143,12 @@ void on_pop() {
   }
 }
 
-void on_zoom_in() { glasses.fov *= 0.99; }
+void on_zoom_in() { glasses.fov *= 0.99;  }
 
 void on_zoom_out() { glasses.fov *= 1.01; }
 
-void on_shift_left() { screen_angle_offset_degrees += 60.0f; }
-void on_shift_right() { screen_angle_offset_degrees -= 60.0f; }
+void on_shift_left() { screen_angle_offset_degrees += 5.0f; }
+void on_shift_right() { screen_angle_offset_degrees -= 5.0f; }
 
 void on_toggle_center_dot() { center_dot_enabled = !center_dot_enabled; }
 
@@ -375,84 +378,60 @@ void grabFramebuffer(Framebuffer &fb) {
 }
 
 void uploadFramebufferTexture(Framebuffer &fb) {
-  // TODO: Might not need to rebind here
   if (fb.tex == 0) {
     glGenTextures(1, &fb.tex);
   }
+
+  // Add cursor to fb.img->data before uploading
+  XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+  if (ci) {
+    int cursor_x = ci->x - ci->xhot;
+    int cursor_y = ci->y - ci->yhot;
+
+    for (unsigned int cy = 0; cy < ci->height; ++cy) {
+      int img_y = cursor_y + cy;
+      if (img_y < 0 || img_y >= fb.height)
+        continue;
+
+      for (unsigned int cx = 0; cx < ci->width; ++cx) {
+        int img_x = cursor_x + cx;
+        if (img_x < 0 || img_x >= fb.width)
+          continue;
+
+        unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
+
+        unsigned char a = (cursor_pixel >> 24) & 0xFF;
+        if (a == 0)
+          continue;
+
+        unsigned char r = (cursor_pixel >> 16) & 0xFF;
+        unsigned char g = (cursor_pixel >> 8) & 0xFF;
+        unsigned char b = (cursor_pixel) & 0xFF;
+
+        unsigned char *p = (unsigned char *)fb.img->data +
+                           img_y * fb.img->bytes_per_line + img_x * 4;
+
+        unsigned char bg_b = p[0];
+        unsigned char bg_g = p[1];
+        unsigned char bg_r = p[2];
+
+        float alpha = a / 255.0f;
+        float inv_alpha = 1.0f - alpha;
+
+        p[0] = (unsigned char)(b * alpha + bg_b * inv_alpha); // B
+        p[1] = (unsigned char)(g * alpha + bg_g * inv_alpha); // G
+        p[2] = (unsigned char)(r * alpha + bg_r * inv_alpha); // R
+        p[3] = 255;                                           // A
+      }
+    }
+    XFree(ci);
+  }
+
   glBindTexture(GL_TEXTURE_2D, fb.tex);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fb.width, fb.height, 0, GL_BGRA,
                GL_UNSIGNED_BYTE, fb.img->data);
-
-
-//   // Get current cursor image and position
-//   XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
-//   if (ci) {
-//     // Cursor position relative to screen
-//     int cursor_x = ci->x - ci->xhot;
-//     int cursor_y = ci->y - ci->yhot;
-//
-//     // Blend cursor pixels into monitor image data if cursor overlaps this
-//     // monitor
-//     for (unsigned int cy = 0; cy < ci->height; ++cy) {
-//       int img_y = cursor_y + cy - m.y;
-//       if (img_y < 0 || img_y >= m.height)
-//         continue;
-//
-//       for (unsigned int cx = 0; cx < ci->width; ++cx) {
-//         int img_x = cursor_x + cx - m.x;
-//         if (img_x < 0 || img_x >= m.width)
-//           continue;
-//
-//         // Cursor pixel ARGB format in ci->pixels[]
-//         unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
-//
-//         // Extract ARGB components from cursor pixel
-//         unsigned char a = (cursor_pixel >> 24) & 0xFF;
-//         unsigned char r = (cursor_pixel >> 16) & 0xFF;
-//         unsigned char g = (cursor_pixel >> 8) & 0xFF;
-//         unsigned char b = (cursor_pixel) & 0xFF;
-//
-//         // Skip fully transparent pixels
-//         if (a == 0)
-//           continue;
-//
-//         // Calculate pixel offset in XImage data (assuming 32bpp BGRA)
-//         unsigned char *p = (unsigned char *)m.img->data +
-//                            img_y * m.img->bytes_per_line + img_x * 4;
-//
-//         // Current background pixel (BGRA)
-//         unsigned char bg_b = p[0];
-//         unsigned char bg_g = p[1];
-//         unsigned char bg_r = p[2];
-//         unsigned char bg_a = p[3];
-//
-//         // Alpha blending (simple over operator)
-//         float alpha = a / 255.0f;
-//         float inv_alpha = 1.0f - alpha;
-//
-//         unsigned char out_r = (unsigned char)(r * alpha + bg_r * inv_alpha);
-//         unsigned char out_g = (unsigned char)(g * alpha + bg_g * inv_alpha);
-//         unsigned char out_b = (unsigned char)(b * alpha + bg_b * inv_alpha);
-//         unsigned char out_a = 255; // fully opaque after blending
-//
-//         // Store blended pixel back as BGRA
-//         p[0] = out_b;
-//         p[1] = out_g;
-//         p[2] = out_r;
-//         p[3] = out_a;
-//       }
-//     }
-//
-//     XFree(ci);
-//   }
-//
-//   glBindTexture(GL_TEXTURE_2D, m.tex);
-//   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m.width, m.height, GL_BGRA,
-//                   GL_UNSIGNED_BYTE, m.img->data);
-
-  // TODO: add cursor
 }
 
 void getMonitorUVs(const MyMonitor &m, const Framebuffer &fb, float &u0,
@@ -612,19 +591,25 @@ void getLookVector(float &dx, float &dy, float &dz) {
   dz = -cos(yawRad) * cos(pitchRad);
 }
 
-// Check ray intersection with a screen quad (simplified)
-bool isLookingAt(float rayX, float rayY, float rayZ, float centerX,
-                 float centerY, float centerZ, float width, float height) {
-  // Project onto plane Z = centerZ
+bool isLookingAt(float eyeX, float eyeY, float eyeZ, float rayX, float rayY,
+                 float rayZ, float centerX, float centerY, float centerZ,
+                 float width, float height) {
+  // Avoid division by zero for ray parallel to plane
   if (fabs(rayZ) < 1e-5)
     return false;
-  float t = (centerZ - 0.0f) / rayZ;
+
+  // Calculate intersection parameter t for plane Z = centerZ
+  float t = (centerZ - eyeZ) / rayZ;
+
+  // Intersection must be in front of the eye
   if (t < 0)
     return false;
 
-  float ix = rayX * t;
-  float iy = rayY * t;
+  // Calculate intersection point coordinates
+  float ix = eyeX + rayX * t;
+  float iy = eyeY + rayY * t;
 
+  // Check if intersection lies within quad bounds
   return (ix >= centerX - width / 2 && ix <= centerX + width / 2 &&
           iy >= centerY - height / 2 && iy <= centerY + height / 2);
 }
@@ -651,7 +636,7 @@ void render() {
 
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
-  gluPerspective(glasses.fov, 1.6, 0.1, 100.0);
+  gluPerspective(glasses.fov, 1920.0 / 1080.0, 0.1, 100.0);
 
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
@@ -677,12 +662,31 @@ void render() {
   roll_perc *= 0.5f;
   roll_perc = 0.0f;
 
+  float focused_w = 3.0f;
+  // radius of circle inscribed in a hexagon, i.e. the distance to the centre
+  // of the edges from the hexagon's centre.
+  //
+  // radius of inscribed circle in a regular n-gon with sidelength a
+  // r = (a / 2) * cot(π/n)
+  //
+  // for hexagon
+  // float r = sqrt(3.0) / 2.0 * focused_w;
+  float angle_deg = 20.0f;
+  // I'm just assuming it works with non-integers.
+  float n = 360.0f / angle_deg;
+  float pi_div_n = 3.14159265359 / n;
+  float r = (focused_w / 2.0) * (cos(pi_div_n) / sin(pi_div_n));
+  float base_z = -r + roll_perc;
+
   // Get gaze vector
+
+  float flat_z = r - focused_w * 1.05f;
+
   float rayX, rayY, rayZ;
   getLookVector(rayX, rayY, rayZ);
   float eyeX = rayX * roll_perc;
   float eyeY = rayY * roll_perc;
-  float eyeZ = rayZ * roll_perc;
+  float eyeZ = rayZ * roll_perc - flat_z;
   float tx = eyeX + rayX;
   float ty = eyeY + rayY;
   float tz = eyeZ + rayZ;
@@ -694,14 +698,7 @@ void render() {
     focusedmonitors.pop_back();
   }
 
-  float focused_w = 3.0f;
-  // radius of circle inscribed in a hexagon, i.e. the distance to the centre
-  // of the edges from the hexagon's centre.
-  float r = sqrt(3.0) / 2.0 * focused_w;
-  float base_z = -r + roll_perc;
-
   {
-    float angle_deg = 60.0f;
 
     for (int i = 0; i < int(focusedmonitors.size()) - 1; i++) {
       const MyMonitor *m = focusedmonitors[i + 1];
@@ -744,7 +741,7 @@ void render() {
     glPushMatrix();
     // -36.0f was just tested and seems okay, idk what it should be to be
     // correct geometrically
-    glRotatef(-36.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(-angle_deg * aspect, 1.0f, 0.0f, 0.0f);
     glTranslatef(0.0f, 0.0f, base_z);
 
     // glBindTexture(GL_TEXTURE_2D, m->tex);
@@ -793,7 +790,8 @@ void render() {
     glPopMatrix();
 
     // Gaze selection
-    if (isLookingAt(rayX, rayY, rayZ, x, y, z, thumbSize, thumbSize)) {
+    if (isLookingAt(eyeX, eyeY, eyeZ, rayX, rayY, rayZ, x, y, z, thumbSize,
+                    thumbSize)) {
       if (focusCandidate == i) {
         focusFrames++;
         if (focusFrames >= FOCUS_HOLD_FRAMES) {

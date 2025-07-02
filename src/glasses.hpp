@@ -70,11 +70,18 @@ static int init_glasses() {
     return result;
   }
 
-  result = set_imu_fq(IMU_FREQUENCE_240);
+  // result = set_imu_fq(IMU_FREQUENCE_240);
+  // if (result != ERR_SUCCESS) {
+  //   fprintf(stderr, "Failed to set imufq=240 on glasses\n");
+  //   return result;
+  // }
+  result = set_imu_fq(IMU_FREQUENCE_120);
   if (result != ERR_SUCCESS) {
-    fprintf(stderr, "Failed to set imufq=240 on glasses\n");
+    fprintf(stderr, "Failed to set imufq=120 on glasses\n");
     return result;
   }
+
+  set_3d(false);
 
   return ERR_SUCCESS;
 }
