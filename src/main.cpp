@@ -2,7 +2,9 @@
 #include <GL/glu.h>
 #include <GL/glx.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/Xfixes.h>
 #include <X11/extensions/Xrandr.h>
 #include <chrono>
 #include <cstdio>
@@ -19,8 +21,48 @@
 #include "glasses.hpp"
 #include "viture.h"
 
+struct Framebuffer {
+  XImage *img;
+  int width, height;
+  GLuint tex;
+};
+
+struct MyMonitor {
+  int x, y, width, height;
+  int index;
+};
+
 float screen_angle_offset_degrees = 0.0f;
 bool center_dot_enabled = true;
+
+Display *dpy;
+Window root;
+Window win;
+GLXContext glc;
+std::vector<MyMonitor> monitors;
+std::vector<MyMonitor *> focusedmonitors;
+
+void grabMonitor(MyMonitor &m);
+
+Framebuffer framebuffer{};
+
+XShmSegmentInfo shmInfo;
+
+void initShm(Display *dpy, Framebuffer &fb);
+
+void cleanupShm(Display *dpy);
+
+void grabFramebuffer(Framebuffer &fb);
+void uploadFramebufferTexture(Framebuffer &fb);
+
+void getMonitorUVs(const MyMonitor &m, const Framebuffer &fb, float &u0,
+                   float &v0, float &u1, float &v1);
+
+bool initGL();
+void cleanup();
+void grabMonitor(MyMonitor &m);
+void uploadTexture(MyMonitor &m);
+void render();
 
 void draw_filled_center_rect(float half_width, float half_height) {
   int viewport[4];
@@ -67,27 +109,6 @@ void draw_filled_center_rect(float half_width, float half_height) {
   glEnable(GL_TEXTURE_2D);
   // glEnable(GL_LIGHTING);
 }
-
-struct MyMonitor {
-  int x, y, width, height;
-  int index;
-  XImage *img = nullptr;
-  XShmSegmentInfo shmInfo;
-  GLuint tex = 0;
-};
-
-Display *dpy;
-Window root;
-Window win;
-GLXContext glc;
-std::vector<MyMonitor> monitors;
-std::vector<MyMonitor *> focusedmonitors;
-
-bool initGL();
-void cleanup();
-void grabMonitor(MyMonitor &m);
-void uploadTexture(MyMonitor &m);
-void render();
 
 void on_align() {
   glasses.oroll = -glasses.roll;
@@ -227,84 +248,49 @@ ok:
     return 1;
   }
 
-  // Prepare XShm images and GL textures for remaining monitors
-  int i = 0;
-  for (MyMonitor &m : monitors) {
-    m.img = XShmCreateImage(dpy, DefaultVisual(dpy, screen),
-                            DefaultDepth(dpy, screen), ZPixmap, NULL,
-                            &m.shmInfo, m.width, m.height);
-    if (!m.img) {
-      fprintf(stderr, "Failed to create XImage for monitor %d\n", i);
-      cleanup();
-      return 1;
-    }
-
-    m.shmInfo.shmid = shmget(IPC_PRIVATE, m.img->bytes_per_line * m.img->height,
-                             IPC_CREAT | 0777);
-    if (m.shmInfo.shmid < 0) {
-      fprintf(stderr, "Failed to get shm segment for monitor %d\n", i);
-      cleanup();
-      return 1;
-    }
-
-    m.shmInfo.shmaddr = m.img->data = (char *)shmat(m.shmInfo.shmid, 0, 0);
-    m.shmInfo.readOnly = False;
-
-    if (!XShmAttach(dpy, &m.shmInfo)) {
-      fprintf(stderr, "XShmAttach failed for monitor %d\n", i);
-      cleanup();
-      return 1;
-    }
-
-    shmctl(m.shmInfo.shmid, IPC_RMID, 0);
-
-    glGenTextures(1, &m.tex);
-    glBindTexture(GL_TEXTURE_2D, m.tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m.width, m.height, 0, GL_BGRA,
-                 GL_UNSIGNED_BYTE, NULL);
-
-    ++i;
-  }
+  long highest = 0;
+  int delay_highest_check_frames = 1000;
+  int frame = 0;
 
   while (true) {
     auto start = std::chrono::high_resolution_clock::now();
-    auto grabStart = std::chrono::high_resolution_clock::now();
-    for (MyMonitor &m : monitors) {
-      grabMonitor(m);
-    }
-    auto grabEnd = std::chrono::high_resolution_clock::now();
-    auto grabMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      grabEnd - grabStart)
-                      .count();
-    std::cout << "grab took" << grabMs << "ms\n";
+    // std::cout << "fb size: " << framebuffer.width << "x" <<
+    // framebuffer.height
+    //           << "\n";
+    // auto grabStart = std::chrono::high_resolution_clock::now();
+    //  for (MyMonitor &m : monitors) {
+    //    grabMonitor(m);
+    //  }
+    grabFramebuffer(framebuffer);
+    // auto grabEnd = std::chrono::high_resolution_clock::now();
+    // auto grabMs = std::chrono::duration_cast<std::chrono::microseconds>(
+    //                   grabEnd - grabStart)
+    //                   .count();
+    // std::cout << "grab took " << grabMs << "us\n";
 
     auto uploadStart = std::chrono::high_resolution_clock::now();
-    for (MyMonitor &m : monitors) {
-      uploadTexture(m);
-    }
+    uploadFramebufferTexture(framebuffer);
     auto uploadEnd = std::chrono::high_resolution_clock::now();
-    auto uploadMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto uploadMs = std::chrono::duration_cast<std::chrono::microseconds>(
                         uploadEnd - uploadStart)
                         .count();
-    std::cout << "upload took" << uploadMs << "ms\n";
+    // std::cout << "upload took " << uploadMs << "us\n";
 
     auto pollStart = std::chrono::high_resolution_clock::now();
     poll_commands(command_sockfd);
     auto pollEnd = std::chrono::high_resolution_clock::now();
-    auto pollMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto pollMs = std::chrono::duration_cast<std::chrono::microseconds>(
                       pollEnd - pollStart)
                       .count();
-    std::cout << "poll took" << pollMs << "ms\n";
+    // std::cout << "poll took " << pollMs << "us\n";
 
     auto renderStart = std::chrono::high_resolution_clock::now();
     render();
     auto renderEnd = std::chrono::high_resolution_clock::now();
-    auto renderMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto renderMs = std::chrono::duration_cast<std::chrono::microseconds>(
                         renderEnd - renderStart)
                         .count();
-    std::cout << "render took" << renderMs << "ms\n";
+    // std::cout << "render took " << renderMs << "us\n";
 
     static __useconds_t second = 1000000;
     static __useconds_t fps = 120;
@@ -313,8 +299,18 @@ ok:
     auto duration_us =
         std::chrono::duration_cast<std::chrono::microseconds>(end - start)
             .count();
+
+    if (frame > delay_highest_check_frames) {
+      if (highest < duration_us) {
+        std::cout << "new highest frame time: " << duration_us << " us\n";
+        highest = duration_us;
+      }
+    } else {
+      ++frame;
+    }
+
     if (us > duration_us) {
-      std::cout << "sleeping for " << (us - duration_us) / 1000 << "ms\n";
+      // std::cout << "sleeping for " << (us - duration_us) << "us\n";
       usleep(us - duration_us);
     }
   }
@@ -324,79 +320,222 @@ ok:
   return 0;
 }
 
-void grabMonitor(MyMonitor &m) {
-  XShmGetImage(dpy, root, m.img, m.x, m.y, AllPlanes);
-}
-
-#include <X11/extensions/Xfixes.h> // make sure this is included at the top
-
-void uploadTexture(MyMonitor &m) {
-  // Get current cursor image and position
-  XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
-  if (ci) {
-    // Cursor position relative to screen
-    int cursor_x = ci->x - ci->xhot;
-    int cursor_y = ci->y - ci->yhot;
-
-    // Blend cursor pixels into monitor image data if cursor overlaps this
-    // monitor
-    for (unsigned int cy = 0; cy < ci->height; ++cy) {
-      int img_y = cursor_y + cy - m.y;
-      if (img_y < 0 || img_y >= m.height)
-        continue;
-
-      for (unsigned int cx = 0; cx < ci->width; ++cx) {
-        int img_x = cursor_x + cx - m.x;
-        if (img_x < 0 || img_x >= m.width)
-          continue;
-
-        // Cursor pixel ARGB format in ci->pixels[]
-        unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
-
-        // Extract ARGB components from cursor pixel
-        unsigned char a = (cursor_pixel >> 24) & 0xFF;
-        unsigned char r = (cursor_pixel >> 16) & 0xFF;
-        unsigned char g = (cursor_pixel >> 8) & 0xFF;
-        unsigned char b = (cursor_pixel) & 0xFF;
-
-        // Skip fully transparent pixels
-        if (a == 0)
-          continue;
-
-        // Calculate pixel offset in XImage data (assuming 32bpp BGRA)
-        unsigned char *p = (unsigned char *)m.img->data +
-                           img_y * m.img->bytes_per_line + img_x * 4;
-
-        // Current background pixel (BGRA)
-        unsigned char bg_b = p[0];
-        unsigned char bg_g = p[1];
-        unsigned char bg_r = p[2];
-        unsigned char bg_a = p[3];
-
-        // Alpha blending (simple over operator)
-        float alpha = a / 255.0f;
-        float inv_alpha = 1.0f - alpha;
-
-        unsigned char out_r = (unsigned char)(r * alpha + bg_r * inv_alpha);
-        unsigned char out_g = (unsigned char)(g * alpha + bg_g * inv_alpha);
-        unsigned char out_b = (unsigned char)(b * alpha + bg_b * inv_alpha);
-        unsigned char out_a = 255; // fully opaque after blending
-
-        // Store blended pixel back as BGRA
-        p[0] = out_b;
-        p[1] = out_g;
-        p[2] = out_r;
-        p[3] = out_a;
-      }
-    }
-
-    XFree(ci);
+void initShm(Display *dpy, Framebuffer &fb) {
+  fb.img = XShmCreateImage(dpy, DefaultVisual(dpy, DefaultScreen(dpy)), 24,
+                           ZPixmap, NULL, &shmInfo, fb.width, fb.height);
+  if (!fb.img) {
+    std::cerr << "oh no error\n";
+    return;
   }
 
-  glBindTexture(GL_TEXTURE_2D, m.tex);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m.width, m.height, GL_BGRA,
-                  GL_UNSIGNED_BYTE, m.img->data);
+  shmInfo.shmid =
+      shmget(IPC_PRIVATE, fb.img->bytes_per_line * fb.height, IPC_CREAT | 0777);
+  if (shmInfo.shmid < 0) {
+    perror("shmget failed");
+    exit(1);
+  }
+
+  shmInfo.shmaddr = (char *)shmat(shmInfo.shmid, 0, 0);
+  if (shmInfo.shmaddr == (char *)-1) {
+    perror("shmat failed");
+    exit(1);
+  }
+
+  fb.img->data = shmInfo.shmaddr;
+  shmInfo.readOnly = False;
+
+  if (!XShmAttach(dpy, &shmInfo)) {
+    fprintf(stderr, "XShmAttach failed\n");
+    exit(1);
+  }
+
+  // Optional: Mark the shared memory for removal (will be deleted once
+  // detached)
+  shmctl(shmInfo.shmid, IPC_RMID, 0);
 }
+
+void cleanupShm(Display *dpy) { XShmDetach(dpy, &shmInfo); }
+
+void grabFramebuffer(Framebuffer &fb) {
+  fb.width = DisplayWidth(dpy, DefaultScreen(dpy));
+  fb.height = DisplayHeight(dpy, DefaultScreen(dpy));
+
+  if (!fb.img || fb.img->width != fb.width || fb.img->height != fb.height) {
+    if (fb.img) {
+      XDestroyImage(fb.img);
+      fb.img = nullptr;
+
+      cleanupShm(dpy);
+    }
+
+    initShm(dpy, fb);
+  }
+
+  XShmGetImage(dpy, root, fb.img, 0, 0, AllPlanes);
+}
+
+void uploadFramebufferTexture(Framebuffer &fb) {
+  // TODO: Might not need to rebind here
+  if (fb.tex == 0) {
+    glGenTextures(1, &fb.tex);
+  }
+  glBindTexture(GL_TEXTURE_2D, fb.tex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fb.width, fb.height, 0, GL_BGRA,
+               GL_UNSIGNED_BYTE, fb.img->data);
+
+
+//   // Get current cursor image and position
+//   XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+//   if (ci) {
+//     // Cursor position relative to screen
+//     int cursor_x = ci->x - ci->xhot;
+//     int cursor_y = ci->y - ci->yhot;
+//
+//     // Blend cursor pixels into monitor image data if cursor overlaps this
+//     // monitor
+//     for (unsigned int cy = 0; cy < ci->height; ++cy) {
+//       int img_y = cursor_y + cy - m.y;
+//       if (img_y < 0 || img_y >= m.height)
+//         continue;
+//
+//       for (unsigned int cx = 0; cx < ci->width; ++cx) {
+//         int img_x = cursor_x + cx - m.x;
+//         if (img_x < 0 || img_x >= m.width)
+//           continue;
+//
+//         // Cursor pixel ARGB format in ci->pixels[]
+//         unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
+//
+//         // Extract ARGB components from cursor pixel
+//         unsigned char a = (cursor_pixel >> 24) & 0xFF;
+//         unsigned char r = (cursor_pixel >> 16) & 0xFF;
+//         unsigned char g = (cursor_pixel >> 8) & 0xFF;
+//         unsigned char b = (cursor_pixel) & 0xFF;
+//
+//         // Skip fully transparent pixels
+//         if (a == 0)
+//           continue;
+//
+//         // Calculate pixel offset in XImage data (assuming 32bpp BGRA)
+//         unsigned char *p = (unsigned char *)m.img->data +
+//                            img_y * m.img->bytes_per_line + img_x * 4;
+//
+//         // Current background pixel (BGRA)
+//         unsigned char bg_b = p[0];
+//         unsigned char bg_g = p[1];
+//         unsigned char bg_r = p[2];
+//         unsigned char bg_a = p[3];
+//
+//         // Alpha blending (simple over operator)
+//         float alpha = a / 255.0f;
+//         float inv_alpha = 1.0f - alpha;
+//
+//         unsigned char out_r = (unsigned char)(r * alpha + bg_r * inv_alpha);
+//         unsigned char out_g = (unsigned char)(g * alpha + bg_g * inv_alpha);
+//         unsigned char out_b = (unsigned char)(b * alpha + bg_b * inv_alpha);
+//         unsigned char out_a = 255; // fully opaque after blending
+//
+//         // Store blended pixel back as BGRA
+//         p[0] = out_b;
+//         p[1] = out_g;
+//         p[2] = out_r;
+//         p[3] = out_a;
+//       }
+//     }
+//
+//     XFree(ci);
+//   }
+//
+//   glBindTexture(GL_TEXTURE_2D, m.tex);
+//   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m.width, m.height, GL_BGRA,
+//                   GL_UNSIGNED_BYTE, m.img->data);
+
+  // TODO: add cursor
+}
+
+void getMonitorUVs(const MyMonitor &m, const Framebuffer &fb, float &u0,
+                   float &v0, float &u1, float &v1) {
+  u0 = (float)m.x / fb.width;
+  v0 = (float)m.y / fb.height;
+  u1 = (float)(m.x + m.width) / fb.width;
+  v1 = (float)(m.y + m.height) / fb.height;
+
+  // TODO: Remove
+  // u0 = 0.0f;
+  // v0 = 0.0f;
+  // u1 = 1.0f;
+  // v1 = 1.0f;
+}
+
+// void uploadTexture(MyMonitor &m) {
+//   // Get current cursor image and position
+//   XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+//   if (ci) {
+//     // Cursor position relative to screen
+//     int cursor_x = ci->x - ci->xhot;
+//     int cursor_y = ci->y - ci->yhot;
+//
+//     // Blend cursor pixels into monitor image data if cursor overlaps this
+//     // monitor
+//     for (unsigned int cy = 0; cy < ci->height; ++cy) {
+//       int img_y = cursor_y + cy - m.y;
+//       if (img_y < 0 || img_y >= m.height)
+//         continue;
+//
+//       for (unsigned int cx = 0; cx < ci->width; ++cx) {
+//         int img_x = cursor_x + cx - m.x;
+//         if (img_x < 0 || img_x >= m.width)
+//           continue;
+//
+//         // Cursor pixel ARGB format in ci->pixels[]
+//         unsigned long cursor_pixel = ci->pixels[cy * ci->width + cx];
+//
+//         // Extract ARGB components from cursor pixel
+//         unsigned char a = (cursor_pixel >> 24) & 0xFF;
+//         unsigned char r = (cursor_pixel >> 16) & 0xFF;
+//         unsigned char g = (cursor_pixel >> 8) & 0xFF;
+//         unsigned char b = (cursor_pixel) & 0xFF;
+//
+//         // Skip fully transparent pixels
+//         if (a == 0)
+//           continue;
+//
+//         // Calculate pixel offset in XImage data (assuming 32bpp BGRA)
+//         unsigned char *p = (unsigned char *)m.img->data +
+//                            img_y * m.img->bytes_per_line + img_x * 4;
+//
+//         // Current background pixel (BGRA)
+//         unsigned char bg_b = p[0];
+//         unsigned char bg_g = p[1];
+//         unsigned char bg_r = p[2];
+//         unsigned char bg_a = p[3];
+//
+//         // Alpha blending (simple over operator)
+//         float alpha = a / 255.0f;
+//         float inv_alpha = 1.0f - alpha;
+//
+//         unsigned char out_r = (unsigned char)(r * alpha + bg_r * inv_alpha);
+//         unsigned char out_g = (unsigned char)(g * alpha + bg_g * inv_alpha);
+//         unsigned char out_b = (unsigned char)(b * alpha + bg_b * inv_alpha);
+//         unsigned char out_a = 255; // fully opaque after blending
+//
+//         // Store blended pixel back as BGRA
+//         p[0] = out_b;
+//         p[1] = out_g;
+//         p[2] = out_r;
+//         p[3] = out_a;
+//       }
+//     }
+//
+//     XFree(ci);
+//   }
+//
+//   glBindTexture(GL_TEXTURE_2D, m.tex);
+//   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m.width, m.height, GL_BGRA,
+//                   GL_UNSIGNED_BYTE, m.img->data);
+// }
 
 bool initGL() {
   int screen = DefaultScreen(dpy);
@@ -550,7 +689,7 @@ void render() {
   gluLookAt(eyeX, eyeY, eyeZ, tx, ty, tz, 0.0f, 1.0f, 0.0f);
   glRotatef(roll, 0.0f, 0.0f, 1.0f);
 
-  while (focusedmonitors.size() > 6) {
+  while (focusedmonitors.size() > 7) {
     // TODO: some other way
     focusedmonitors.pop_back();
   }
@@ -576,16 +715,19 @@ void render() {
       glRotatef(-i * angle_deg + screen_angle_offset_degrees, 0.0f, 1.0f, 0.0f);
       glTranslatef(0.0f, 0.0f, base_z);
 
-      glBindTexture(GL_TEXTURE_2D, m->tex);
+      // framebuffer already bound
+      // glBindTexture(GL_TEXTURE_2D, m->tex);
 
       glBegin(GL_QUADS);
-      glTexCoord2f(0, 0);
+      float u0, v0, u1, v1;
+      getMonitorUVs(*m, framebuffer, u0, v0, u1, v1);
+      glTexCoord2f(u0, v0);
       glVertex3f(-focused_w / 2, focused_h / 2, 0);
-      glTexCoord2f(1, 0);
+      glTexCoord2f(u1, v0);
       glVertex3f(focused_w / 2, focused_h / 2, 0);
-      glTexCoord2f(1, 1);
+      glTexCoord2f(u1, v1);
       glVertex3f(focused_w / 2, -focused_h / 2, 0);
-      glTexCoord2f(0, 1);
+      glTexCoord2f(u0, v1);
       glVertex3f(-focused_w / 2, -focused_h / 2, 0);
       glEnd();
 
@@ -594,24 +736,29 @@ void render() {
   }
 
   if (focusedmonitors.size() > 0 && focusedmonitors[0] != nullptr) {
+    // place first focused monitor in our lap
     const auto &m = focusedmonitors.at(0);
     float aspect = (float)m->height / m->width;
     float focused_h = focused_w * aspect;
 
     glPushMatrix();
+    // -36.0f was just tested and seems okay, idk what it should be to be
+    // correct geometrically
     glRotatef(-36.0f, 1.0f, 0.0f, 0.0f);
     glTranslatef(0.0f, 0.0f, base_z);
 
-    glBindTexture(GL_TEXTURE_2D, m->tex);
+    // glBindTexture(GL_TEXTURE_2D, m->tex);
 
     glBegin(GL_QUADS);
-    glTexCoord2f(0, 0);
+    float u0, v0, u1, v1;
+    getMonitorUVs(*m, framebuffer, u0, v0, u1, v1);
+    glTexCoord2f(u0, v0);
     glVertex3f(-focused_w / 2, focused_h / 2, 0);
-    glTexCoord2f(1, 0);
+    glTexCoord2f(u1, v0);
     glVertex3f(focused_w / 2, focused_h / 2, 0);
-    glTexCoord2f(1, 1);
+    glTexCoord2f(u1, v1);
     glVertex3f(focused_w / 2, -focused_h / 2, 0);
-    glTexCoord2f(0, 1);
+    glTexCoord2f(u0, v1);
     glVertex3f(-focused_w / 2, -focused_h / 2, 0);
     glEnd();
 
@@ -627,17 +774,20 @@ void render() {
     float y = thumbY;
     float z = base_z;
 
-    glBindTexture(GL_TEXTURE_2D, monitors[i].tex);
+    // glBindTexture(GL_TEXTURE_2D, monitors[i].tex);
     glPushMatrix();
     glTranslatef(x, y, z);
+
     glBegin(GL_QUADS);
-    glTexCoord2f(0, 0);
+    float u0, v0, u1, v1;
+    getMonitorUVs(monitors[i], framebuffer, u0, v0, u1, v1);
+    glTexCoord2f(u0, v0);
     glVertex3f(-thumbSize / 2, thumbSize / 2, 0);
-    glTexCoord2f(1, 0);
+    glTexCoord2f(u1, v0);
     glVertex3f(thumbSize / 2, thumbSize / 2, 0);
-    glTexCoord2f(1, 1);
+    glTexCoord2f(u1, v1);
     glVertex3f(thumbSize / 2, -thumbSize / 2, 0);
-    glTexCoord2f(0, 1);
+    glTexCoord2f(u0, v1);
     glVertex3f(-thumbSize / 2, -thumbSize / 2, 0);
     glEnd();
     glPopMatrix();
@@ -672,14 +822,14 @@ void render() {
 }
 
 void cleanup() {
-  for (MyMonitor &m : monitors) {
-    if (m.img) {
-      XShmDetach(dpy, &m.shmInfo);
-      shmdt(m.shmInfo.shmaddr);
-      XDestroyImage(m.img);
-      glDeleteTextures(1, &m.tex);
-    }
-  }
+  // for (MyMonitor &m : monitors) {
+  //   if (m.img) {
+  //     XShmDetach(dpy, &m.shmInfo);
+  //     shmdt(m.shmInfo.shmaddr);
+  //     XDestroyImage(m.img);
+  //     glDeleteTextures(1, &m.tex);
+  //   }
+  // }
   focusedmonitors.clear();
   monitors.clear();
 
