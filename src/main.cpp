@@ -19,6 +19,9 @@
 #include "glasses.hpp"
 #include "viture.h"
 
+float screen_angle_offset_degrees = 0.0f;
+bool center_dot_enabled = true;
+
 void draw_filled_center_rect(float half_width, float half_height) {
   int viewport[4];
   glGetIntegerv(GL_VIEWPORT, viewport);
@@ -61,8 +64,8 @@ void draw_filled_center_rect(float half_width, float half_height) {
   glPopMatrix();
   glMatrixMode(GL_MODELVIEW);
   glColor3f(1.0f, 1.0f, 1.0f);
-    glEnable(GL_TEXTURE_2D);
-    //glEnable(GL_LIGHTING);
+  glEnable(GL_TEXTURE_2D);
+  // glEnable(GL_LIGHTING);
 }
 
 struct MyMonitor {
@@ -120,6 +123,11 @@ void on_zoom_in() { glasses.fov *= 0.99; }
 
 void on_zoom_out() { glasses.fov *= 1.01; }
 
+void on_shift_left() { screen_angle_offset_degrees += 60.0f; }
+void on_shift_right() { screen_angle_offset_degrees -= 60.0f; }
+
+void on_toggle_center_dot() { center_dot_enabled = !center_dot_enabled; }
+
 int main(int argc, char **argv) {
   if (init_glasses() != ERR_SUCCESS) {
     fprintf(stderr, "Failed to setup glasses\n");
@@ -134,6 +142,9 @@ int main(int argc, char **argv) {
   on_pop_command = on_pop;
   on_zoom_in_command = on_zoom_in;
   on_zoom_out_command = on_zoom_out;
+  on_shift_left_command = on_shift_left;
+  on_shift_right_command = on_shift_right;
+  on_toggle_center_dot_command = on_toggle_center_dot;
   int command_sockfd = setup_command_socket();
   if (command_sockfd < 0) {
     fprintf(stderr, "Failed to create command socket\n");
@@ -259,13 +270,41 @@ ok:
 
   while (true) {
     auto start = std::chrono::high_resolution_clock::now();
+    auto grabStart = std::chrono::high_resolution_clock::now();
     for (MyMonitor &m : monitors) {
       grabMonitor(m);
+    }
+    auto grabEnd = std::chrono::high_resolution_clock::now();
+    auto grabMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      grabEnd - grabStart)
+                      .count();
+    std::cout << "grab took" << grabMs << "ms\n";
+
+    auto uploadStart = std::chrono::high_resolution_clock::now();
+    for (MyMonitor &m : monitors) {
       uploadTexture(m);
     }
+    auto uploadEnd = std::chrono::high_resolution_clock::now();
+    auto uploadMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        uploadEnd - uploadStart)
+                        .count();
+    std::cout << "upload took" << uploadMs << "ms\n";
 
+    auto pollStart = std::chrono::high_resolution_clock::now();
     poll_commands(command_sockfd);
+    auto pollEnd = std::chrono::high_resolution_clock::now();
+    auto pollMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      pollEnd - pollStart)
+                      .count();
+    std::cout << "poll took" << pollMs << "ms\n";
+
+    auto renderStart = std::chrono::high_resolution_clock::now();
     render();
+    auto renderEnd = std::chrono::high_resolution_clock::now();
+    auto renderMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        renderEnd - renderStart)
+                        .count();
+    std::cout << "render took" << renderMs << "ms\n";
 
     static __useconds_t second = 1000000;
     static __useconds_t fps = 120;
@@ -275,6 +314,7 @@ ok:
         std::chrono::duration_cast<std::chrono::microseconds>(end - start)
             .count();
     if (us > duration_us) {
+      std::cout << "sleeping for " << (us - duration_us) / 1000 << "ms\n";
       usleep(us - duration_us);
     }
   }
@@ -533,7 +573,7 @@ void render() {
       float focused_h = focused_w * aspect;
 
       glPushMatrix();
-      glRotatef(-i * angle_deg, 0.0f, 1.0f, 0.0f);
+      glRotatef(-i * angle_deg + screen_angle_offset_degrees, 0.0f, 1.0f, 0.0f);
       glTranslatef(0.0f, 0.0f, base_z);
 
       glBindTexture(GL_TEXTURE_2D, m->tex);
@@ -623,7 +663,9 @@ void render() {
     }
   }
 
-  draw_filled_center_rect(4.0f, 4.0f);
+  if (center_dot_enabled) {
+    draw_filled_center_rect(4.0f, 4.0f);
+  }
 
   glFlush();
   glXSwapBuffers(dpy, win);

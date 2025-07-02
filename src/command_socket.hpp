@@ -44,6 +44,9 @@ static void (*on_push_command)(void) = nullptr;
 static void (*on_pop_command)(void) = nullptr;
 static void (*on_zoom_in_command)(void) = nullptr;
 static void (*on_zoom_out_command)(void) = nullptr;
+static void (*on_shift_left_command)(void) = nullptr;
+static void (*on_shift_right_command)(void) = nullptr;
+static void (*on_toggle_center_dot_command)(void) = nullptr;
 
 static void poll_commands(int sockfd) {
   char buf[256];
@@ -72,6 +75,18 @@ static void poll_commands(int sockfd) {
     } else if (cmd == "zoom_out") {
       if (on_zoom_out_command != nullptr) {
         on_zoom_out_command();
+      }
+    } else if (cmd == "shift_left") {
+      if (on_shift_left_command != nullptr) {
+        on_shift_left_command();
+      }
+    } else if (cmd == "shift_right") {
+      if (on_shift_right_command != nullptr) {
+        on_shift_right_command();
+      }
+    } else if (cmd == "center_dot_toggle") {
+      if (on_toggle_center_dot_command != nullptr) {
+        on_toggle_center_dot_command();
       }
     }
   }
