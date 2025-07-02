@@ -70,5 +70,11 @@ static int init_glasses() {
     return result;
   }
 
+  result = set_imu_fq(IMU_FREQUENCE_240);
+  if (result != ERR_SUCCESS) {
+    fprintf(stderr, "Failed to set imufq=240 on glasses\n");
+    return result;
+  }
+
   return ERR_SUCCESS;
 }

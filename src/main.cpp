@@ -4,9 +4,11 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/XShm.h>
 #include <X11/extensions/Xrandr.h>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/types.h>
@@ -16,6 +18,52 @@
 #include "command_socket.hpp"
 #include "glasses.hpp"
 #include "viture.h"
+
+void draw_filled_center_rect(float half_width, float half_height) {
+  int viewport[4];
+  glGetIntegerv(GL_VIEWPORT, viewport);
+  int screenWidth = viewport[2];
+  int screenHeight = viewport[3];
+
+  float centerX = screenWidth / 2.0f;
+  float centerY = screenHeight / 2.0f;
+
+  // Switch to orthographic projection
+  glMatrixMode(GL_PROJECTION);
+  glPushMatrix();
+  {
+    glLoadIdentity();
+    glOrtho(0, screenWidth, 0, screenHeight, -1, 1);
+
+    glMatrixMode(GL_MODELVIEW);
+    {
+      glPushMatrix();
+      glLoadIdentity();
+
+      glDisable(GL_LIGHTING);
+      glDisable(GL_TEXTURE_2D);
+      glDisable(GL_DEPTH_TEST);
+
+      glColor3f(1.0f, 0.0f, 0.0f); // Red
+
+      glBegin(GL_QUADS);
+      glVertex2f(centerX - half_width, centerY - half_height);
+      glVertex2f(centerX + half_width, centerY - half_height);
+      glVertex2f(centerX + half_width, centerY + half_height);
+      glVertex2f(centerX - half_width, centerY + half_height);
+      glEnd();
+
+      glEnable(GL_DEPTH_TEST);
+    }
+    glPopMatrix(); // Modelview
+    glMatrixMode(GL_PROJECTION);
+  }
+  glPopMatrix();
+  glMatrixMode(GL_MODELVIEW);
+  glColor3f(1.0f, 1.0f, 1.0f);
+    glEnable(GL_TEXTURE_2D);
+    //glEnable(GL_LIGHTING);
+}
 
 struct MyMonitor {
   int x, y, width, height;
@@ -112,27 +160,39 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  int excludeIndex = -1;
   if (argc == 1) {
     // No argument: list monitors and exit
     printf("Detected monitors:\n");
     for (int i = 0; i < n; i++) {
-      printf("Monitor %d: x=%d y=%d width=%d height=%d\n", i, xrrmonitors[i].x,
-             xrrmonitors[i].y, xrrmonitors[i].width, xrrmonitors[i].height);
+      auto outputInfo =
+          XRRGetOutputInfo(dpy, XRRGetScreenResourcesCurrent(dpy, root),
+                           xrrmonitors[i].outputs[0]);
+      printf("Monitor %d (%s): x=%d y=%d width=%d height=%d\n", i,
+             outputInfo->name, xrrmonitors[i].x, xrrmonitors[i].y,
+             xrrmonitors[i].width, xrrmonitors[i].height);
+      std::string name(outputInfo->name);
+      if (name == "DP-1" || name == "DP-2") {
+        std::cout << "Detected viture glasses probably, continuing\n";
+        excludeIndex = i;
+        goto ok;
+      }
     }
     XRRFreeMonitors(xrrmonitors);
     XCloseDisplay(dpy);
     return 0;
+  } else {
+    // Parse excluded monitor index from first argument
+    excludeIndex = atoi(argv[1]);
+    if (excludeIndex < 0 || excludeIndex >= n) {
+      fprintf(stderr, "Invalid exclude monitor index %d (0 to %d allowed)\n",
+              excludeIndex, n - 1);
+      XRRFreeMonitors(xrrmonitors);
+      XCloseDisplay(dpy);
+      return 1;
+    }
   }
-
-  // Parse excluded monitor index from first argument
-  int excludeIndex = atoi(argv[1]);
-  if (excludeIndex < 0 || excludeIndex >= n) {
-    fprintf(stderr, "Invalid exclude monitor index %d (0 to %d allowed)\n",
-            excludeIndex, n - 1);
-    XRRFreeMonitors(xrrmonitors);
-    XCloseDisplay(dpy);
-    return 1;
-  }
+ok:
 
   // Copy monitors except the excluded one
   for (int i = 0, index = 0; i < n; i++) {
@@ -198,6 +258,7 @@ int main(int argc, char **argv) {
   }
 
   while (true) {
+    auto start = std::chrono::high_resolution_clock::now();
     for (MyMonitor &m : monitors) {
       grabMonitor(m);
       uploadTexture(m);
@@ -207,9 +268,15 @@ int main(int argc, char **argv) {
     render();
 
     static __useconds_t second = 1000000;
-    static __useconds_t fps = 200;
+    static __useconds_t fps = 120;
     static __useconds_t us = second / fps;
-    usleep(us);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+            .count();
+    if (us > duration_us) {
+      usleep(us - duration_us);
+    }
   }
 
   cleanup();
@@ -441,6 +508,7 @@ void render() {
   float ty = eyeY + rayY;
   float tz = eyeZ + rayZ;
   gluLookAt(eyeX, eyeY, eyeZ, tx, ty, tz, 0.0f, 1.0f, 0.0f);
+  glRotatef(roll, 0.0f, 0.0f, 1.0f);
 
   while (focusedmonitors.size() > 6) {
     // TODO: some other way
@@ -457,7 +525,7 @@ void render() {
     float angle_deg = 60.0f;
 
     for (int i = 0; i < int(focusedmonitors.size()) - 1; i++) {
-      const MyMonitor *m = focusedmonitors[i+1];
+      const MyMonitor *m = focusedmonitors[i + 1];
       if (m == nullptr)
         continue;
 
@@ -554,6 +622,8 @@ void render() {
       }
     }
   }
+
+  draw_filled_center_rect(4.0f, 4.0f);
 
   glFlush();
   glXSwapBuffers(dpy, win);
